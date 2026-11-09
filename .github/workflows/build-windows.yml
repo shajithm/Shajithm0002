@@ -1,0 +1,80 @@
+name: Build Windows app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build PDF Studio.exe
+        shell: cmd
+        run: >
+          python -m PyInstaller --noconfirm --clean --windowed
+          --name "PDF Studio" --icon pdfstudio.ico --add-data "pdfstudio.ico;."
+          --collect-submodules pdf2docx
+          --exclude-module tkinter --exclude-module matplotlib --exclude-module pandas
+          --exclude-module scipy --exclude-module IPython --exclude-module pkg_resources
+          --exclude-module setuptools --exclude-module PySide6.QtWebEngineCore
+          --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtQuick
+          --exclude-module PySide6.QtQml --exclude-module PySide6.QtMultimedia
+          main.py
+
+      - name: Self-test the packaged exe
+        shell: cmd
+        run: |
+          start "" /wait "dist\PDF Studio\PDF Studio.exe" --selftest "%CD%\selftest.log"
+          type selftest.log
+          findstr /C:"SELFTEST OK" selftest.log
+
+      - name: Check the window starts
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\PDF Studio\PDF Studio.exe" -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { Write-Error "App exited early with code $($p.ExitCode)"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "App window started OK"
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Portable zip
+        shell: pwsh
+        run: Compress-Archive -Path "dist\PDF Studio" -DestinationPath "dist\PDFStudio-Portable.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDFStudio-Windows
+          path: |
+            dist/PDFStudio-Setup.exe
+            dist/PDFStudio-Portable.zip
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: PDF Studio 1.0 (build ${{ github.run_number }})
+          body: "Windows build of PDF Studio. Download PDFStudio-Setup.exe (installer) or PDFStudio-Portable.zip (no install)."
+          files: |
+            dist/PDFStudio-Setup.exe
+            dist/PDFStudio-Portable.zip
